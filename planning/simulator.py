@@ -23,7 +23,7 @@ class z1_simulator:
         self.create_viewer()
 
         self.build_ground()
-        # self.build_objects()
+        # self.build_chair()
 
         self.initialize_arm()
         self.initialize_events()
@@ -34,9 +34,7 @@ class z1_simulator:
         self.listener_thread = threading.Thread(target=self.listen_cmd, daemon=True)
         self.listener_thread.start()
 
-        self.moving_to_target = False
-        self.target_reached = False
-        self.steps_count = 0
+        self.received_dof_targets = None
     
     def send_sim_state(self, state):
         try:
@@ -49,13 +47,25 @@ class z1_simulator:
     def listen_cmd(self):
         buffer = ""
         while self.running:
-            recv = self.conn.recv(1024).decode('utf-8')
-            buffer += recv
-            while '\n' in buffer:
-                line, buffer = buffer.split('\n', 1)
-                msg = json.loads(line)
-                if msg["type"] == "cmd":
-                    print("[IsaacSim] Received command:", msg["data"])
+            try:
+                data = self.conn.recv(1024).decode('utf-8')
+                if not data:
+                    continue
+                buffer += data
+                while '\n' in buffer:
+                    line, buffer = buffer.split('\n', 1)
+                    if not line.strip():
+                        continue
+                    msg = json.loads(line)
+                    if msg["type"] in ["cmd", "joint_state"]:
+                        joint_targets = msg["data"].get("position") or msg["data"].get("joint_targets")
+                        if joint_targets and len(joint_targets) == self.num_dofs:
+                            self.received_dof_targets = np.array(joint_targets)
+                        else:
+                            print("[IsaacSim] Received joint_targets length mismatch")
+            except Exception as e:
+                print("[IsaacSim] Error receiving command:", e)
+                time.sleep(0.01)  # 避免线程空转占 CPU
 
     def create_sim(self):
         sim_params = gymapi.SimParams()
@@ -88,10 +98,10 @@ class z1_simulator:
 
         self.gym.viewer_camera_look_at(self.viewer, None, cam_pos, look_at)
 
-        # Set viewer window always on top
-        window_id = os.popen("wmctrl -l | grep 'Isaac Gym' | awk '{print $1}'").read().strip()
-        if window_id:
-            os.system(f"wmctrl -i -r {window_id} -b add,above")
+        # # Set viewer window always on top
+        # window_id = os.popen("wmctrl -l | grep 'Isaac Gym' | awk '{print $1}'").read().strip()
+        # if window_id:
+        #     os.system(f"wmctrl -i -r {window_id} -b add,above")
 
     def create_env(self):
         num_envs = 1
@@ -108,63 +118,34 @@ class z1_simulator:
         plane_params.normal = gymapi.Vec3(0, 0, 1)
         self.gym.add_ground(self.sim, plane_params)
     
-    # def build_objects(self):
-    #     # Load table assets
-    #     table_dims = gymapi.Vec3(0.4, 0.4, 0.3)  # 长、宽、高
-    #     asset_options = gymapi.AssetOptions()
-    #     asset_options.fix_base_link = True
-    #     table_asset = self.gym.create_box(self.sim, table_dims.x, table_dims.y, table_dims.z, asset_options)
+    def build_chair(self):
+        # 椅座参数
+        seat_size = gymapi.Vec3(0.5 / 2, 0.5 / 2, 0.05 / 2)  # 半尺寸（IsaacGym create_box 接收半尺寸）
+        seat_pose = gymapi.Transform()
+        seat_pose.p = gymapi.Vec3(0.5, 0.0, 0.4)  # 椅座中心位置
+        seat_pose.r = gymapi.Quat()  # 无旋转
 
-    #     # Create the first table
-    #     table1_pose = gymapi.Transform()
-    #     table1_pose.p = gymapi.Vec3(0.0, 0.5, table_dims.z/2)
-    #     self.gym.create_actor(self.env, table_asset, table1_pose, "table1", 0, 0)
+        seat_asset_options = gymapi.AssetOptions()
+        seat_asset_options.fix_base_link = True  # 椅子固定，不动
+        seat_asset = self.gym.create_box(self.sim, seat_size.x, seat_size.y, seat_size.z, seat_asset_options)
 
-    #     # Create the second table
-    #     table2_pose = gymapi.Transform()
-    #     table2_pose.p = gymapi.Vec3(0.5, 0.0, table_dims.z/2)
-    #     self.gym.create_actor(self.env, table_asset, table2_pose, "table2", 0, 0)
+        self.gym.create_actor(self.env, seat_asset, seat_pose, "chair_seat", 0, 0)
 
-    #     # Load block assets
-    #     block_dims = gymapi.Vec3(0.05, 0.02, 0.1)  # 立方体
-    #     asset_options = gymapi.AssetOptions()
-    #     block_asset = self.gym.create_box(self.sim, block_dims.x, block_dims.y, block_dims.z, asset_options)
+        # 椅背参数
+        back_size = gymapi.Vec3(0.05 / 2, 0.5 / 2, 0.6 / 2)  # 半尺寸
+        back_pose = gymapi.Transform()
+        back_pose.p = gymapi.Vec3(0.5 - 0.025, 0.0, 0.45)  # 椅背中心位置
 
-    #     # Place the block on the table
-    #     block_pose = gymapi.Transform()
-    #     block_pose.p = gymapi.Vec3(0.5, 0.0, table_dims.z + block_dims.z/2)
-    #     block_actor = self.gym.create_actor(self.env, block_asset, block_pose, "block", 0, 0)
+        # 计算椅背15度绕Y轴旋转四元数
+        angle = 15.0 * math.pi / 180.0
+        q_back = gymapi.Quat.from_euler_zyx(0, -angle, 0)
+        back_pose.r = q_back
 
-    #     # Set block physical properties
-    #     props = self.gym.get_actor_rigid_body_properties(self.env, block_actor)
-    #     props[0].mass = 0.1  # Mass
-    #     self.gym.set_actor_rigid_body_properties(self.env, block_actor, props)
+        back_asset_options = gymapi.AssetOptions()
+        back_asset_options.fix_base_link = True
+        back_asset = self.gym.create_box(self.sim, back_size.x, back_size.y, back_size.z, back_asset_options)
 
-    #     props = self.gym.get_actor_rigid_shape_properties(self.env, block_actor)
-    #     props[0].friction = 10.0
-    #     self.gym.set_actor_rigid_shape_properties(self.env, block_actor, props)
-
-    #     block_transform = self.gym.get_rigid_transform(self.env, block_actor)
-    #     print(f"Block position: {block_transform.p.x - block_dims.x/2}, {block_transform.p.y - block_dims.y/2}, {block_transform.p.z - block_dims.z/2}")
-
-
-    #     ball_density = 1.0
-    #     ball_radius = 0.02
-
-    #     # Create a sphere asset for the ball
-    #     asset_options = gymapi.AssetOptions()
-    #     asset_options.density = 0.5
-    #     asset_options.fix_base_link = False  # Movable
-    #     ball_asset = self.gym.create_sphere(self.sim, ball_radius, asset_options)
-
-    #     ball_pose = gymapi.Transform()
-    #     ball_pose.p = gymapi.Vec3(0.5, 0.0, table_dims.z + ball_radius)
-
-    #     ball_actor = self.gym.create_actor(self.env, ball_asset, ball_pose, "ball", 0, 0)
-
-    #     props = self.gym.get_actor_rigid_body_properties(self.env, ball_actor)
-    #     props[0].mass = (4/3) * 3.14159 * ball_radius**3 * ball_density
-    #     self.gym.set_actor_rigid_body_properties(self.env, ball_actor, props)
+        self.gym.create_actor(self.env, back_asset, back_pose, "chair_backrest", 0, 0)
     
     def initialize_arm(self):
         asset_root = "../assets/z1/urdf"
@@ -206,14 +187,6 @@ class z1_simulator:
         # Initialize Pinocchio model and pose
         self.q_pin = pin.neutral(self.pin_model)
         self.q_home = pin.neutral(self.pin_model)
-
-        # transform = self.gym.get_rigid_transform(self.env, 7)
-        # T_base_to_link06 = np.eye(4)
-        # T_base_to_link06[:3, :3] = R.from_quat([transform.r.x, transform.r.y, transform.r.z, transform.r.w]).as_matrix()
-        # T_base_to_link06[:3, 3] = np.array([transform.p.x, transform.p.y, transform.p.z])
-        # print(f"Base to Link06 transform: {T_base_to_link06}")
-        # print(f"Initial position: {transform.p.x}, {transform.p.y}, {transform.p.z} Initial rotation: {transform.r.x}, {transform.r.y}, {transform.r.z}, {transform.r.w}")
-        # self.target_position = np.array([transform.p.x, transform.p.y, transform.p.z], dtype=np.float32)
 
         
     def initialize_events(self):
@@ -273,8 +246,10 @@ class z1_simulator:
                 else:
                     self.dof_targets[i] += direction * 0.005
             
-
-
+        if self.received_dof_targets is not None:
+            # 如果接收到新的关节目标角度，更新目标
+            self.dof_targets = np.array(self.received_dof_targets.copy(), dtype=np.float32)
+            self.received_dof_targets = None
         self.gym.set_actor_dof_position_targets(self.env, self.actor, self.dof_targets)
         transform = self.gym.get_rigid_transform(self.env, 8)
         state = {

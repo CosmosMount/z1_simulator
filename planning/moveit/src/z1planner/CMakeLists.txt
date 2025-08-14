@@ -17,6 +17,7 @@ find_package(moveit_ros_planning_interface REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 
 add_executable(z1planner src/planning.cpp)
+# add_executable(z1planner src/grasp.cpp)
 
 ament_target_dependencies(z1planner
   rclcpp

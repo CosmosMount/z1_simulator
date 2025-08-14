@@ -23,6 +23,9 @@
   <exec_depend>moveit_ros_planning_interface</exec_depend>
   <exec_depend>tf2_geometry_msgs</exec_depend>
 
+  <depend>moveit_task_constructor_core</depend>
+  <depend>moveit_core</depend>
+
   <export>
     <build_type>ament_cmake</build_type>
   </export>
