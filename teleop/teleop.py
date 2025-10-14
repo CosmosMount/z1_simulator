@@ -3,16 +3,18 @@ from pytransform3d import rotations
 from multiprocessing import Array, Process, shared_memory, Queue, Manager, Event, Semaphore
 
 from simulator import z1Simulator
+from controller import z1Controller
 from tracker import VRTracker
 from processor import VuerPreprocessor
 from utils import link06_init_pose
 
 import os
 import csv
+import rospy
 
 
 class VuerTeleop:
-    def __init__(self):
+    def __init__(self, sim=False, real=False):
         self.resolution = (720, 1280)
         self.crop_size_w = 0
         self.crop_size_h = 0
@@ -29,8 +31,19 @@ class VuerTeleop:
         self.gripper_angle = 0.0
         self.head_rmat = np.eye(3)
         self.processor = VuerPreprocessor()
-        self.simulator = z1Simulator()
         self.tracker = VRTracker(self.resolution_cropped, self.shm.name, image_queue, toggle_streaming, ngrok=True)
+        
+        self.sim = False
+        self.real = False
+
+        if sim:
+            self.sim = True
+            self.simulator = z1Simulator()
+
+        if real:
+            self.real = True
+            self.controller = z1Controller()
+        
 
     def step(self):
         if self.tracker.connected.value:
@@ -48,28 +61,43 @@ class VuerTeleop:
             self.frame_idx += 1
             right_pos = right_controller_mat[:3, 3]
 
-            with open(csv_file, mode='a', newline='') as file:
-                writer = csv.writer(file)
-                writer.writerow([self.frame_idx] + head_mat[:3,3].tolist() + right_pos.tolist() + raw_r_mat[:3, 3].tolist())
+            # only for vr data debug
+            # with open(csv_file, mode='a', newline='') as file:
+            #     writer = csv.writer(file)
+            #     writer.writerow([self.frame_idx] + head_mat[:3,3].tolist() + right_pos.tolist() + raw_r_mat[:3, 3].tolist())
         else:
             target = np.array([[1,0,0,0.037],
                       [0,1,0,0],
                       [0,0,1,0.17],
                       [0,0,0,1]])
-        left_img, right_img = self.simulator.step(target, self.head_rmat, gripper_angle=self.gripper_angle)
-        np.copyto(self.img_array, np.hstack((left_img, right_img)))
+        
+        # step and visualization of simulator
+        if self.sim:
+            left_img, right_img = self.simulator.step(target, self.head_rmat, gripper_angle=self.gripper_angle)
+            np.copyto(self.img_array, np.hstack((left_img, right_img)))
+
+        # step of controller
+        if self.real:
+            self.controller.step(target, self.head_rmat, gripper_angle=self.gripper_angle)
+
+    def exit(self):
+        if self.sim:
+            self.simulator.end()
+        if self.real:
+            rospy.signal_shutdown("User Exit")
+        exit(0)
+        
 
 if __name__ == "__main__":
-    csv_file = "controller_log.csv"
-
-    with open(csv_file, mode='w', newline='') as file:
-        writer = csv.writer(file)
-        writer.writerow(['frame', 'head_x', 'head_y', 'head_z', 'right_x', 'right_y', 'right_z', 'raw_x', 'raw_y', 'raw_z'])
-    teleop = VuerTeleop()
+    # only for vr data debug
+    # csv_file = "controller_log.csv"
+    # with open(csv_file, mode='w', newline='') as file:
+    #     writer = csv.writer(file)
+    #     writer.writerow(['frame', 'head_x', 'head_y', 'head_z', 'right_x', 'right_y', 'right_z', 'raw_x', 'raw_y', 'raw_z'])
+    teleop = VuerTeleop(real=True)
     try:
         while True:
             teleop.step()
     except KeyboardInterrupt:
         print("Exiting Vuer Teleop")
-        teleop.simulator.end()
-        exit(0)
+        teleop.exit()

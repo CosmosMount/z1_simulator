@@ -4,11 +4,9 @@ from isaacgym import gymutil
 import os
 import time
 import math
-import ikpy
 import numpy as np
 import pinocchio as pin
 
-from ikpy.chain import Chain
 from numpy.linalg import norm,solve
 from scipy.spatial.transform import Rotation as R
 

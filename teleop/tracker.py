@@ -4,6 +4,7 @@ from vuer.events import ClientEvent
 from vuer.schemas import ImageBackground, group, Hands, WebRTCStereoVideoPlane, DefaultScene, MotionControllers
 from multiprocessing import Array, Process, shared_memory, Queue, Manager, Event, Semaphore
 import numpy as np
+import signal
 import asyncio
 from webrtc.zed_server import *
 
@@ -66,17 +67,17 @@ class VRTracker:
             cors.add(app.router.add_get("/client.js", javascript))
             cors.add(app.router.add_post("/offer", rtc.offer))
 
-            self.webrtc_process = Process(target=web.run_app, args=(app,), kwargs={"host": "0.0.0.0", "port": 8080, "ssl_context": ssl_context})
-            self.webrtc_process.daemon = True
+            self.webrtc_process = Process(target=web.run_app, args=(app,), kwargs={"host": "0.0.0.0", "port": 8080, "ssl_context": ssl_context}, daemon=True)
             self.webrtc_process.start()
             # web.run_app(app, host="0.0.0.0", port=8080, ssl_context=ssl_context)
 
-        self.process = Process(target=self.run)
-        self.process.daemon = True
+        self.process = Process(target=self.run, daemon = True)
         self.process.start()
 
     def run(self):
         self.app.run()
+        
+        
 
     async def track_controller(self, event, session, fps=60):
         print(f"Movement Event: key-{event.key} value:{event.value}\n")
